@@ -26,7 +26,7 @@
               ~@body)
           (finally (set-macro-character char# original#)))))
 
-(def lisp-readers
+(defn lisp-readers []
   (->> (seq macros)
        (map-indexed (fn [idx r] (when r [(char idx)  (str r)])))
        (filter identity)
@@ -45,14 +45,14 @@
 (defn get-dispatch-macro-character [character]
   (aget dispatch-macros (int character)))
 
-(def dispatch-readers
+(defn dispatch-readers []
   (->> (seq dispatch-macros)
        (map-indexed (fn [idx r] (when r [(char idx)  (str r)])))
        (filter identity)
        (into {})))
 
 (defmacro with-dispatch-macro-character [character read & body]
-  `(let [char# ~character
+  `(let [char#     ~character
          read#     ~read
          original# (get-dispatch-macro-character char#)]
      (try (do (set-dispatch-macro-character char# read#)
@@ -86,7 +86,7 @@
 
 (def nullary-constructor?
   #(and (nullary-constructor %) true))
-    
+
 ;;no longer nullary?
 (def nullary-readers
   (map (fn [class]
@@ -165,13 +165,13 @@
      sdrawkcab\"")
   (with-macro-character \" reversed-string-reader
     (read-string testdata))
-  
+
   (defn reversed-list-reader [reader quote opts pending-forms]
       (reverse (macro-read-list  reader quote opts pending-forms)))
 
   (def testlist
     "(a b c d)")
-  
+
   (with-macro-character \( reversed-list-reader
     (read-string testlist))
 
@@ -183,7 +183,7 @@
 
  (defn read-vector [reader quote opts pending-forms]
       (vec (read-delimited-list \] reader false)))
-  
+
   (def testvector
     "[a b c d]")
 
@@ -200,10 +200,10 @@
           :list      (into '() stuff)
           (set stuff))))
 
-  (with-macro-character \[ nondeterministic-reader 
+  (with-macro-character \[ nondeterministic-reader
     (read-string testvector))
 
-  (with-macro-character \[ nondeterministic-reader 
+  (with-macro-character \[ nondeterministic-reader
     (frequencies (repeatedly 1000 #(read-string testvector))))
   ;;{[a b c d] 681, #{a c b d} 319}
 
@@ -228,5 +228,5 @@
 ;; (:c :b :a "dlrow" "olleh")
 ;; reader-macros.core> (wierd-clojure!)
 ;; ["olleh" "dlrow" :a :b :c]
-  
+
 )
