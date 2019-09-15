@@ -1,5 +1,6 @@
 (ns reader-macros.core
   (:use    [clojure.string :only [lower-case join]])
+  (:require [camel-snake-kebab.core :refer [->kebab-case-string]])
   (:import (clojure.lang LispReader
                          LispReader$WrappingReader)))
 
@@ -59,7 +60,6 @@
               ~@body)
           (finally (set-dispatch-macro-character char# original#)))))
 
-
 (defn reset-read-tables!
   "Undo all the damage we've wrought!"
   []
@@ -69,59 +69,53 @@
     (set-dispatch-macro-character c r)))
 
 ;;;; Dynamically define convenience functions.
-(defn class->predicates [class]
-  (map lower-case (drop-last (re-seq #"[A-Z][a-z]+" class))))
 
-(defn class->read-class [class]
-  (symbol (format "macro-read-%s" (join "-" (class->predicates class)))))
-
-(defn nullary-constructor [class]
-  (loop [constructors (into '() (:declaredConstructors (bean class)))]
-    (if (empty? constructors)
-      false
-      (let [constructor (first constructors)]
-        (if (zero? (count (:parameterTypes (bean constructor))))
-          constructor
-          (recur (rest constructors)))))))
-
-(def nullary-constructor?
-  #(and (nullary-constructor %) true))
-
-;;no longer nullary?
-(def nullary-readers
-  (map (fn [class]
-         {:class (symbol (.getName class))
-          :constructor (nullary-constructor class)
-          :read-class (class->read-class (.getSimpleName class))})
-       (filter (fn [class]
-                 (and (re-find #"Reader$" (.getSimpleName class))
-                      (nullary-constructor? class)))
-               (into '() (:declaredClasses (bean LispReader))))))
-
-;;these are no longer nullary...
-;;reads take the form
-;;:: Object reader, Object doublequote, Object opts, Object pendingForms
-
-;;; Gather a list of these somehow for a dynamic API, or can we do
-;;; some namespace-tricks?
 (def +default-opts+  {:features #{"clj"}
                       :eofthrow :eof})
 
-(defmacro def-read-macros []
-  `(do ~@(map (fn [{class       :class
-                    constructor :constructor
-                    read-class  :read-class}]
-                `(let [constructor# (nullary-constructor ~class)]
-                   (.setAccessible constructor# true)
-                   (let [class-reader# (.newInstance constructor# nil)]
-                     (defn ~read-class
-                       ([reader# character# opts# pendingforms#]
-                        (.invoke class-reader# reader# character# opts# pendingforms#))
-                       ([reader# character#]
-                        (~read-class reader# character# ~'+default-opts+ nil))))))
-              nullary-readers)))
+(def ^:private alphabet
+  (map (comp symbol str char)
+       (range (int \a) (+ 26 (int \a)))))
 
-(def-read-macros)
+(defmacro ^:private def-macro-read-fns []
+  (let [macro-readers (->> (.getDeclaredClasses LispReader)
+                           (filter #(re-matches #".*Reader" (.getName %))))]
+    `(do ~@(map
+             (fn [reader-class]
+               (let [snme      (.getSimpleName reader-class)
+                     class-nme (str "LispReader$" snme)
+                     fn-nme    (->> (->kebab-case-string snme)
+                                    reverse
+                                    (drop 7) ;; string[-reader]
+                                    reverse
+                                    (apply str)
+                                    (format "macro-read-%s")
+                                    symbol)
+                     ctors     (.getConstructors reader-class)]
+                 `(defn ~fn-nme
+                    ~(str "Calls .invoke on an instance of " class-nme ".\n"
+                          "The 4 last args are passed in this method call "
+                          "while all those before are passed to the "
+                          "constructor.")
+                    ~@(for [ctor ctors
+                            :let [ctor-types (vec (.getParameterTypes ctor))
+                                  ctor-cnt   (.getParameterCount ctor)
+                                  arg-vec    (vec (take (+ 4 ctor-cnt)
+                                                        alphabet))]]
+                        `(~arg-vec
+                           (let [ctor# (doto (.getConstructor
+                                               ~reader-class
+                                               (into-array Class ~ctor-types))
+                                             (.setAccessible true))
+                                 instance# (.newInstance
+                                             ~reader-class
+                                             ~@(take ctor-cnt arg-vec))]
+                             (.invoke instance# ~@(drop ctor-cnt arg-vec)))))
+                    ([reader# character#]
+                     (~fn-nme reader# character# +default-opts+ nil)))))
+             macro-readers))))
+
+(def-macro-read-fns)
 
 ;;; Couple of unary exceptions
 (let [macro-deref-reader (LispReader$WrappingReader. 'deref)]
@@ -137,7 +131,8 @@
   "Interestingly enough, this returns a vector.  Clojure's reader
    uses vector's internally, likely because they're simpler to conj onto?"
   ([delimiter reader recursive? opts pending-forms]
-   (LispReader/readDelimitedList delimiter reader recursive? opts pending-forms))
+   (LispReader/readDelimitedList
+     delimiter reader recursive? opts pending-forms))
   ([delimiter reader recursive?]
    (read-delimited-list delimiter reader recursive? +default-opts+ nil)))
 
@@ -158,7 +153,8 @@
   ;;reversed strings from blog...
   (defn reversed-string-reader
     [reader quote opts pending-forms]
-      (clojure.string/reverse (macro-read-string  reader quote opts pending-forms)))
+    (-> (macro-read-string  reader quote opts pending-forms)
+        clojure.string/reverse))
 
   (def testdata
     "\"Hello!  This is a string of text, hopefully it's
